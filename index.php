@@ -4,7 +4,7 @@ header("Content-Type: application/json; charset=utf-8");
 header("Access-Control-Allow-Origin: *");
 
 // === CONFIGURAÇÃO DE TOKENS ===
-$TOKEN_PRODUCAO = ['playboy', 'djhenrique', 'boca']; // ✅ Array de tokens de produção principal
+$TOKEN_PRODUCAO = ['playboy', 'djhenrique', 'boca', 'aramas']; // ✅ Array de tokens de produção principal
 $TOKEN_TESTE = 'teste';        // Token de teste
 $LIMITE_TESTE = 10;
 
