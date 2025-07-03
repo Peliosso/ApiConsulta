@@ -3,12 +3,10 @@ session_start();
 header("Content-Type: application/json; charset=utf-8");
 header("Access-Control-Allow-Origin: *");
 
-// === CONFIGURAÇÃO DE TOKENS ===
-$TOKEN_PRODUCAO = ['playboy', 'djhenrique', 'boca', 'aramas']; // ✅ Array de tokens de produção principal
-$TOKEN_TESTE = 'teste';        // Token de teste
+$TOKEN_PRODUCAO = ['playboy', 'djhenrique', 'boca', 'aramas'];
+$TOKEN_TESTE = 'teste';
 $LIMITE_TESTE = 10;
 
-// === FUNÇÃO DE RESPOSTA JSON PADRÃO ===
 function responder($statusHttp, $conteudo) {
     $conteudo["créditos"] = "@RibeiroDo171";
     http_response_code($statusHttp);
@@ -16,7 +14,6 @@ function responder($statusHttp, $conteudo) {
     exit;
 }
 
-// === VERIFICAÇÃO DO TOKEN ===
 $token = $_GET['token'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 if (empty($token) || (!in_array($token, $TOKEN_PRODUCAO) && $token !== $TOKEN_TESTE)) {
     responder(401, [
@@ -25,7 +22,6 @@ if (empty($token) || (!in_array($token, $TOKEN_PRODUCAO) && $token !== $TOKEN_TE
     ]);
 }
 
-// === CONTROLE DE CONSULTAS DO TOKEN DE TESTE ===
 $arquivo_contador = __DIR__ . "/contador_$token.json";
 
 if ($token === $TOKEN_TESTE) {
@@ -45,107 +41,111 @@ if ($token === $TOKEN_TESTE) {
     file_put_contents($arquivo_contador, json_encode($contador));
 }
 
-// === VALIDAÇÃO E FORMATAÇÃO DO CPF ===
 if (!isset($_GET['cpf']) || empty($_GET['cpf'])) {
-    responder(400, [
-        "status" => false,
-        "mensagem" => "CPF não informado."
-    ]);
+    responder(400, ["status" => false, "mensagem" => "CPF não informado."]);
 }
 
 $cpf = preg_replace('/\D/', '', $_GET['cpf']);
 if (strlen($cpf) !== 11) {
-    responder(400, [
-        "status" => false,
-        "mensagem" => "CPF inválido ou incompleto."
-    ]);
+    responder(400, ["status" => false, "mensagem" => "CPF inválido ou incompleto."]);
 }
 
-// === CONSULTA NA API EXTERNA ===
-$url = "https://patronhost.online/apis/cpf.php?cpf=$cpf";
+$url = "https://mdzapis.com/api/consultanew?base=cpf_serasa_completo&query=$cpf&apikey=Ribeiro7";
 $ch = curl_init($url);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+curl_setopt($ch, CURLOPT_TIMEOUT, 15);
 $response = curl_exec($ch);
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
 
 if (!$response || $http_code !== 200) {
-    responder(500, ["status" => false, "mensagem" => "Erro ao acessar a API externa (cURL)."]);
+    responder(500, ["status" => false, "mensagem" => "Erro ao acessar a API externa."]);
 }
 
-$response_utf8 = mb_convert_encoding($response, 'UTF-8', 'ISO-8859-1');
-$data = json_decode($response_utf8, true);
-
-if (!$data || $data["status"] !== true || $data["resultado"] !== "success") {
-    responder(404, [
-        "status" => false,
-        "mensagem" => "CPF não encontrado ou resposta inválida da API."
-    ]);
+$data = json_decode($response, true);
+if (!$data || !isset($data["dados_pessoais"])) {
+    responder(404, ["status" => false, "mensagem" => "CPF não encontrado ou resposta inválida da API."]);
 }
 
-$dados = $data["dados"];
+$pessoal = $data["dados_pessoais"];
+$enderecos = $data["enderecos"] ?? [];
+$parentes = $data["parentes"] ?? [];
+$telefones = $data["telefones"] ?? [];
+$emails = $data["emails"] ?? [];
+$score = $data["score"] ?? [];
+$poder = $data["poder_aquisitivo"] ?? [];
 
-// === CÁLCULO DE IDADE E SIGNO ===
-$idade = '---';
-$signo = '---';
-if (!empty($dados["data_nascimento"])) {
-    $nascimento = DateTime::createFromFormat('d/m/Y', $dados["data_nascimento"]);
-    if ($nascimento) {
+$idade = "---";
+$signo = "---";
+if (!empty($pessoal["data_nascimento"])) {
+    $nasc = DateTime::createFromFormat('d/m/Y', $pessoal["data_nascimento"]);
+    if ($nasc) {
         $hoje = new DateTime();
-        $idade = $hoje->diff($nascimento)->y . ' anos';
-        $signo = calcularSigno((int)$nascimento->format('d'), (int)$nascimento->format('m'));
+        $idade = $hoje->diff($nasc)->y . " anos";
+        $signo = calcularSigno((int)$nasc->format("d"), (int)$nasc->format("m"));
     }
 }
 
-// === DATA/HORA DA CONSULTA ===
 $data_consulta = date('d/m/Y');
 $hora_consulta = date('H:i:s');
 
-// === RESPOSTA FINAL ===
 responder(200, [
     "status" => true,
-    "mensagem" => "Dados obtidos com sucesso.",
+    "mensagem" => "Dados encontrados com sucesso.",
     "data_consulta" => $data_consulta,
     "hora_consulta" => $hora_consulta,
-    "dados_formatados" => [
-        "Nome Completo" => $dados["nome"] ?? "---",
-        "Nome Social" => $dados["nome_social"] ?? "---",
-        "Mãe" => $dados["mae"] ?? "---",
-        "Pai" => $dados["pai"] ?? "---",
-        "Sexo" => $dados["sexo"] ?? "---",
-        "Raça" => $dados["raca"] ?? "---",
-        "Data de Nascimento" => $dados["data_nascimento"] . " ({$idade})",
-        "Idade" => $idade,
-        "Signo" => $signo,
-        "Tipo Sanguíneo" => $dados["tipo_sanguineo"] ?? "---",
-        "Nacionalidade" => $dados["nacionalidade"] ?? "---",
-        "Município de Nascimento" => $dados["municipio_nascimento"] ?? "---",
-        "Data de Óbito" => $dados["data_obito"] ?? "Não encontrado",
-        "CPF" => $dados["cpf"] ?? $cpf,
-        "Endereço" => [
-            "Tipo de Logradouro" => $dados["tipo_logradouro"] ?? "---",
-            "Logradouro" => $dados["logradouro"] ?? "---",
-            "Número" => $dados["numero"] ?? "---",
-            "Complemento" => $dados["complemento"] ?? "---",
-            "Bairro" => $dados["bairro"] ?? "---",
-            "CEP" => $dados["cep"] ?? "---",
-            "Município de Residência" => $dados["municipio_residencia"] ?? "---",
-            "País de Residência" => $dados["pais_residencia"] ?? "---"
-        ],
-        "Telefone" => [
-            "DDD" => $dados["telefone_ddd"] ?? "---",
-            "Número" => $dados["telefone_numero"] ?? "---"
-        ]
-    ]
+    "nome" => $pessoal["nome"] ?? "---",
+    "cpf" => $pessoal["cpf"] ?? $cpf,
+    "idade" => $idade,
+    "signo" => $signo,
+    "sexo" => $pessoal["sexo"] ?? "---",
+    "data_nascimento" => $pessoal["data_nascimento"] ?? "---",
+    "mae" => $pessoal["nome_mae"] ?? "---",
+    "pai" => $pessoal["nome_pai"] ?? "---",
+    "titulo_eleitor" => $pessoal["titulo_eleitor"] ?? "---",
+    "nacionalidade" => $pessoal["nacionalidade"] ?? "---",
+    "renda" => $pessoal["renda"] ?? "---",
+    "faixa_renda" => $pessoal["faixa_renda"]["descricao"] ?? "---",
+    "mosaic" => [
+        "principal" => $pessoal["codigo_mosaic"]["principal"]["descricao"] ?? "---",
+        "novo" => $pessoal["codigo_mosaic"]["novo"]["descricao"] ?? "---",
+        "secundario" => $pessoal["codigo_mosaic"]["secundario"]["descricao"] ?? "---"
+    ],
+    "emails" => $emails,
+    "score" => [
+        "CSB8" => $score["CSB8"] ?? "---",
+        "CSB8_FAIXA" => $score["CSB8_FAIXA"] ?? "---",
+        "CSBA" => $score["CSBA"] ?? "---",
+        "CSBA_FAIXA" => $score["CSBA_FAIXA"] ?? "---"
+    ],
+    "poder_aquisitivo" => [
+        "PODER_AQUISITIVO" => $poder["PODER_AQUISITIVO"] ?? "---",
+        "RENDA_PODER_AQUISITIVO" => $poder["RENDA_PODER_AQUISITIVO"] ?? "---",
+        "FX_PODER_AQUISITIVO" => $poder["FX_PODER_AQUISITIVO"] ?? "---"
+    ],
+    "enderecos" => $enderecos,
+    "telefones" => array_map(function($tel) {
+        return [
+            "DDD" => $tel["DDD"] ?? "---",
+            "TELEFONE" => $tel["TELEFONE"] ?? "---",
+            "TIPO" => $tel["TIPO_TELEFONE"] ?? "---",
+            "CLASSIFICACAO" => $tel["CLASSIFICACAO"] ?? "---"
+        ];
+    }, $telefones),
+    "parentes" => array_map(function($p) {
+        return [
+            "nome" => $p["NOME_VINCULO"] ?? "---",
+            "vinculo" => $p["VINCULO"] ?? "---",
+            "cpf" => $p["CPF_VINCULO"] ?? "---"
+        ];
+    }, $parentes)
 ]);
 
-// === FUNÇÃO PARA SIGNO ===
 function calcularSigno($dia, $mes) {
     $signos = [
-        ['capricórnio', 20], ['aquário', 19], ['peixes', 20], ['áries', 20],
-        ['touro', 20], ['gêmeos', 20], ['câncer', 21], ['leão', 22],
-        ['virgem', 22], ['libra', 22], ['escorpião', 21], ['sagitário', 21], ['capricórnio', 31]
+        ['Capricórnio', 20], ['Aquário', 19], ['Peixes', 20], ['Áries', 20],
+        ['Touro', 20], ['Gêmeos', 20], ['Câncer', 21], ['Leão', 22],
+        ['Virgem', 22], ['Libra', 22], ['Escorpião', 21], ['Sagitário', 21], ['Capricórnio', 31]
     ];
-    return ($dia <= $signos[$mes - 1][1]) ? ucfirst($signos[$mes - 1][0]) : ucfirst($signos[$mes][0]);
+    return ($dia <= $signos[$mes - 1][1]) ? $signos[$mes - 1][0] : $signos[$mes][0];
 }
