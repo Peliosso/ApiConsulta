@@ -3,6 +3,7 @@ session_start();
 header("Content-Type: application/json; charset=utf-8");
 header("Access-Control-Allow-Origin: *");
 
+// === CONFIGURAÇÃO DE TOKENS ===
 $TOKEN_PRODUCAO = ['playboy', 'djhenrique', 'boca', 'aramas'];
 $TOKEN_TESTE = 'teste';
 $LIMITE_TESTE = 10;
@@ -14,6 +15,7 @@ function responder($statusHttp, $conteudo) {
     exit;
 }
 
+// === VALIDAÇÃO DE TOKEN ===
 $token = $_GET['token'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? '';
 if (empty($token) || (!in_array($token, $TOKEN_PRODUCAO) && $token !== $TOKEN_TESTE)) {
     responder(401, [
@@ -22,13 +24,12 @@ if (empty($token) || (!in_array($token, $TOKEN_PRODUCAO) && $token !== $TOKEN_TE
     ]);
 }
 
+// === LIMITAR CONSULTAS DO TOKEN DE TESTE ===
 $arquivo_contador = __DIR__ . "/contador_$token.json";
-
 if ($token === $TOKEN_TESTE) {
     if (!file_exists($arquivo_contador)) {
         file_put_contents($arquivo_contador, json_encode(["consultas" => 0]));
     }
-
     $contador = json_decode(file_get_contents($arquivo_contador), true);
     if ($contador["consultas"] >= $LIMITE_TESTE) {
         responder(403, [
@@ -36,116 +37,94 @@ if ($token === $TOKEN_TESTE) {
             "mensagem" => "Limite de 10 consultas do token de teste atingido. Adquira um token com @RibeiroDo171."
         ]);
     }
-
     $contador["consultas"]++;
     file_put_contents($arquivo_contador, json_encode($contador));
 }
 
+// === VALIDAÇÃO DO CPF ===
 if (!isset($_GET['cpf']) || empty($_GET['cpf'])) {
     responder(400, ["status" => false, "mensagem" => "CPF não informado."]);
 }
-
 $cpf = preg_replace('/\D/', '', $_GET['cpf']);
 if (strlen($cpf) !== 11) {
     responder(400, ["status" => false, "mensagem" => "CPF inválido ou incompleto."]);
 }
 
-$url = "https://mdzapis.com/api/consultanew?base=cpf_serasa_completo&query=$cpf&apikey=Ribeiro7";
+// === CONSULTA NA API EXTERNA ===
+$url = "https://mdzapis.com/api/cpft?cpf=$cpf&apikey=Ribeiro7";
 $ch = curl_init($url);
-curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT => 15,
+    CURLOPT_FOLLOWLOCATION => true,
+    CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+    CURLOPT_SSL_VERIFYPEER => false,
+    CURLOPT_SSL_VERIFYHOST => false,
+    CURLOPT_HTTPHEADER => [
+        "Accept: application/json",
+        "Referer: https://mdzapis.com/"
+    ]
+]);
+
 $response = curl_exec($ch);
 $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curl_error = curl_error($ch);
 curl_close($ch);
 
 if (!$response || $http_code !== 200) {
-    responder(500, ["status" => false, "mensagem" => "Erro ao acessar a API externa."]);
+    responder(500, [
+        "status" => false,
+        "mensagem" => "Erro ao acessar a API externa (cURL bloqueado ou site exige JavaScript).",
+        "erro" => $curl_error,
+        "http_code" => $http_code
+    ]);
 }
 
+// === TRATAR RESPOSTA ===
 $data = json_decode($response, true);
-if (!$data || !isset($data["dados_pessoais"])) {
-    responder(404, ["status" => false, "mensagem" => "CPF não encontrado ou resposta inválida da API."]);
+if (!$data || !$data["status"] || empty($data["dados"])) {
+    responder(404, ["status" => false, "mensagem" => "CPF não encontrado ou resposta inválida."]);
 }
 
-$pessoal = $data["dados_pessoais"];
-$enderecos = $data["enderecos"] ?? [];
-$parentes = $data["parentes"] ?? [];
-$telefones = $data["telefones"] ?? [];
-$emails = $data["emails"] ?? [];
-$score = $data["score"] ?? [];
-$poder = $data["poder_aquisitivo"] ?? [];
-
-$idade = "---";
-$signo = "---";
-if (!empty($pessoal["data_nascimento"])) {
-    $nasc = DateTime::createFromFormat('d/m/Y', $pessoal["data_nascimento"]);
-    if ($nasc) {
-        $hoje = new DateTime();
-        $idade = $hoje->diff($nasc)->y . " anos";
-        $signo = calcularSigno((int)$nasc->format("d"), (int)$nasc->format("m"));
-    }
-}
-
+$d = $data["dados"];
 $data_consulta = date('d/m/Y');
 $hora_consulta = date('H:i:s');
 
+// === MONTAR RESPOSTA FINAL ===
 responder(200, [
     "status" => true,
-    "mensagem" => "Dados encontrados com sucesso.",
+    "mensagem" => "Consulta realizada com sucesso.",
     "data_consulta" => $data_consulta,
     "hora_consulta" => $hora_consulta,
-    "nome" => $pessoal["nome"] ?? "---",
-    "cpf" => $pessoal["cpf"] ?? $cpf,
-    "idade" => $idade,
-    "signo" => $signo,
-    "sexo" => $pessoal["sexo"] ?? "---",
-    "data_nascimento" => $pessoal["data_nascimento"] ?? "---",
-    "mae" => $pessoal["nome_mae"] ?? "---",
-    "pai" => $pessoal["nome_pai"] ?? "---",
-    "titulo_eleitor" => $pessoal["titulo_eleitor"] ?? "---",
-    "nacionalidade" => $pessoal["nacionalidade"] ?? "---",
-    "renda" => $pessoal["renda"] ?? "---",
-    "faixa_renda" => $pessoal["faixa_renda"]["descricao"] ?? "---",
-    "mosaic" => [
-        "principal" => $pessoal["codigo_mosaic"]["principal"]["descricao"] ?? "---",
-        "novo" => $pessoal["codigo_mosaic"]["novo"]["descricao"] ?? "---",
-        "secundario" => $pessoal["codigo_mosaic"]["secundario"]["descricao"] ?? "---"
-    ],
-    "emails" => $emails,
-    "score" => [
-        "CSB8" => $score["CSB8"] ?? "---",
-        "CSB8_FAIXA" => $score["CSB8_FAIXA"] ?? "---",
-        "CSBA" => $score["CSBA"] ?? "---",
-        "CSBA_FAIXA" => $score["CSBA_FAIXA"] ?? "---"
-    ],
-    "poder_aquisitivo" => [
-        "PODER_AQUISITIVO" => $poder["PODER_AQUISITIVO"] ?? "---",
-        "RENDA_PODER_AQUISITIVO" => $poder["RENDA_PODER_AQUISITIVO"] ?? "---",
-        "FX_PODER_AQUISITIVO" => $poder["FX_PODER_AQUISITIVO"] ?? "---"
-    ],
-    "enderecos" => $enderecos,
-    "telefones" => array_map(function($tel) {
-        return [
-            "DDD" => $tel["DDD"] ?? "---",
-            "TELEFONE" => $tel["TELEFONE"] ?? "---",
-            "TIPO" => $tel["TIPO_TELEFONE"] ?? "---",
-            "CLASSIFICACAO" => $tel["CLASSIFICACAO"] ?? "---"
-        ];
-    }, $telefones),
-    "parentes" => array_map(function($p) {
-        return [
-            "nome" => $p["NOME_VINCULO"] ?? "---",
-            "vinculo" => $p["VINCULO"] ?? "---",
-            "cpf" => $p["CPF_VINCULO"] ?? "---"
-        ];
-    }, $parentes)
+    "dados" => [
+        "CPF" => $d["cpf"] ?? "---",
+        "Nome Completo" => $d["nome"] ?? "---",
+        "Nome Social" => $d["nome_social"] ?? "---",
+        "Nome da Mãe" => $d["mae"] ?? "---",
+        "Nome do Pai" => $d["pai"] ?? "---",
+        "Sexo" => $d["sexo"] ?? "---",
+        "Raça" => $d["raca"] ?? "---",
+        "Data de Nascimento" => $d["data_nascimento"] ?? "---",
+        "Tipo Sanguíneo" => $d["tipo_sanguineo"] ?? "---",
+        "Nacionalidade" => $d["nacionalidade"] ?? "---",
+        "Município de Nascimento" => $d["municipio_nascimento"] ?? "---",
+        "Data de Óbito" => $d["data_obito"] ?? "Não encontrado",
+        "Número do Documento" => $d["num_documento"] ?? "Não encontrado",
+        "Código Sistema Origem" => $d["cod_sistema_origem"] ?? "Não encontrado",
+        "Sistema de Origem" => $d["nome_sistema_origem"] ?? "Não encontrado",
+        "Motivo" => $d["motivo"] ?? "Não encontrado",
+        "Tipo de Logradouro" => $d["tipo_logradouro"] ?? "---",
+        "Logradouro" => $d["logradouro"] ?? "---",
+        "Número" => $d["numero"] ?? "---",
+        "Complemento" => $d["complemento"] ?? "---",
+        "Bairro" => $d["bairro"] ?? "---",
+        "CEP" => $d["cep"] ?? "---",
+        "Município de Residência" => $d["municipio_residencia"] ?? "---",
+        "País de Residência" => $d["pais_residencia"] ?? "---",
+        "Telefone DDD" => $d["telefone_ddd"] ?? "---",
+        "Telefone Número" => $d["telefone_numero"] ?? "---",
+        "Telefone Tipo" => $d["telefone_tipo"] ?? "---",
+        "CNS" => $d["cns"] ?? "---"
+    ]
 ]);
-
-function calcularSigno($dia, $mes) {
-    $signos = [
-        ['Capricórnio', 20], ['Aquário', 19], ['Peixes', 20], ['Áries', 20],
-        ['Touro', 20], ['Gêmeos', 20], ['Câncer', 21], ['Leão', 22],
-        ['Virgem', 22], ['Libra', 22], ['Escorpião', 21], ['Sagitário', 21], ['Capricórnio', 31]
-    ];
-    return ($dia <= $signos[$mes - 1][1]) ? $signos[$mes - 1][0] : $signos[$mes][0];
-}
